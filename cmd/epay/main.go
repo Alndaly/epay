@@ -16,13 +16,19 @@ import (
 	"syscall"
 	"time"
 
+	"epay/internal/admin"
 	"epay/internal/config"
 	"epay/internal/gateway"
-	"epay/internal/provider"
+	"epay/internal/model"
 	_ "epay/internal/provider/all" // 注册全部内置支付驱动
 	"epay/internal/server"
+	"epay/internal/store"
 	"epay/internal/store/sqlite"
+	"epay/web"
 )
+
+// Version 版本号，构建时通过 -ldflags "-X main.Version=v1.0.0" 注入。
+var Version = "dev"
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
@@ -47,29 +53,40 @@ func run(configPath string) error {
 	}
 	defer st.Close()
 
-	channels, err := buildChannels(cfg.Channels, log)
-	if err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := importConfig(ctx, st, cfg, log); err != nil {
 		return err
 	}
-	merchants := make([]gateway.Merchant, 0, len(cfg.Merchants))
-	for _, m := range cfg.Merchants {
-		merchants = append(merchants, gateway.Merchant{PID: m.PID, Key: m.Key, Name: m.Name})
-	}
-
-	svc, err := gateway.New(st, gateway.Options{
+	svc, err := gateway.New(ctx, st, gateway.Options{
 		BaseURL:       cfg.Server.BaseURL,
 		OrderTTL:      cfg.Order.Expire,
 		NotifyTimeout: cfg.Order.NotifyTimeout,
-		Merchants:     merchants,
-		Channels:      channels,
 		Logger:        log,
 	})
 	if err != nil {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	httpOpts := server.Options{TrustProxy: cfg.Server.TrustProxy}
+	if cfg.Admin.Password == "" {
+		log.Warn("未设置 admin.password，管理后台未启用")
+	} else {
+		adm, err := admin.New(ctx, svc, st, admin.Options{
+			Username:   cfg.Admin.Username,
+			Password:   cfg.Admin.Password,
+			TrustProxy: cfg.Server.TrustProxy,
+			Version:    Version,
+			UI:         web.UI(),
+			Logger:     log,
+		})
+		if err != nil {
+			return fmt.Errorf("初始化管理后台: %w", err)
+		}
+		httpOpts.Admin = adm
+		log.Info("管理后台已启用", "url", cfg.Server.BaseURL+"/admin/")
+	}
 
 	notifierDone := make(chan struct{})
 	go func() {
@@ -79,7 +96,7 @@ func run(configPath string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Listen,
-		Handler:           server.New(svc, log, cfg.Server.TrustProxy),
+		Handler:           server.New(svc, log, httpOpts),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -87,7 +104,7 @@ func run(configPath string) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() {
-		log.Info("网关已启动", "listen", cfg.Server.Listen, "base_url", cfg.Server.BaseURL)
+		log.Info("网关已启动", "version", Version, "listen", cfg.Server.Listen, "base_url", cfg.Server.BaseURL)
 		serveErr <- srv.ListenAndServe()
 	}()
 
@@ -111,28 +128,49 @@ func run(configPath string) error {
 	return nil
 }
 
-// buildChannels 按配置实例化启用的支付渠道。
-func buildChannels(list []config.Channel, log *slog.Logger) ([]gateway.Channel, error) {
-	var channels []gateway.Channel
-	for i := range list {
-		c := &list[i]
-		if !c.IsEnabled() {
-			continue
+// importConfig 首次启动（数据库中没有任何商户与渠道）时，把配置文件中的商户与渠道导入数据库；
+// 之后以数据库（管理后台）为准，配置文件中的这两项会被忽略。
+func importConfig(ctx context.Context, st store.Store, cfg *config.Config, log *slog.Logger) error {
+	if len(cfg.Merchants) == 0 && len(cfg.Channels) == 0 {
+		return nil
+	}
+	merchants, err := st.ListMerchants(ctx)
+	if err != nil {
+		return err
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil {
+		return err
+	}
+	if len(merchants) > 0 || len(channels) > 0 {
+		log.Warn("数据库中已有商户或渠道配置，配置文件中的 merchants / channels 已忽略，请在管理后台修改")
+		return nil
+	}
+
+	for _, m := range cfg.Merchants {
+		if len(m.Key) < 16 {
+			return fmt.Errorf("商户 %s 的 key 至少 16 位", m.PID)
 		}
-		p, err := provider.New(c.Driver, c)
+		err := st.CreateMerchant(ctx, &model.Merchant{PID: m.PID, Key: m.Key, Name: m.Name, Enabled: true})
 		if err != nil {
-			return nil, fmt.Errorf("初始化支付方式 %s: %w", c.Type, err)
+			return fmt.Errorf("导入商户 %s: %w", m.PID, err)
 		}
-		if _, ok := p.(provider.Simulator); ok {
-			log.Warn("已启用模拟支付渠道，任何人都可以模拟支付成功，切勿用于生产环境", "type", c.Type)
+	}
+	for i := range cfg.Channels {
+		c := &cfg.Channels[i]
+		opts, err := c.OptionsJSON()
+		if err != nil {
+			return err
 		}
-		channels = append(channels, gateway.Channel{Type: c.Type, Name: c.Name, Provider: p})
-		log.Info("支付方式已加载", "type", c.Type, "driver", c.Driver)
+		err = st.CreateChannel(ctx, &model.ChannelConfig{
+			Type: c.Type, Driver: c.Driver, Name: c.Name, Enabled: c.IsEnabled(), Options: opts,
+		})
+		if err != nil {
+			return fmt.Errorf("导入支付渠道 %s: %w", c.Type, err)
+		}
 	}
-	if len(channels) == 0 {
-		return nil, errors.New("没有启用的支付渠道")
-	}
-	return channels, nil
+	log.Info("已从配置文件导入商户与支付渠道", "merchants", len(cfg.Merchants), "channels", len(cfg.Channels))
+	return nil
 }
 
 func newLogger(c config.Log) *slog.Logger {

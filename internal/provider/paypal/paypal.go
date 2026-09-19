@@ -52,12 +52,27 @@ type PayPal struct {
 }
 
 func init() {
-	provider.Register("paypal", func(opts provider.Options) (provider.Provider, error) {
-		var cfg Config
-		if err := opts.Decode(&cfg); err != nil {
-			return nil, err
-		}
-		return New(cfg)
+	provider.Register(provider.Driver{
+		Name:        "paypal",
+		Title:       "PayPal",
+		Description: "PayPal Orders v2，按汇率换算为外币扣款",
+		DefaultType: "paypal",
+		Webhook:     "在 PayPal 开发者后台的应用中添加 Webhook，订阅 Checkout order approved 与 Payment capture completed 事件",
+		Fields: append([]provider.Field{
+			{Key: "client_id", Label: "Client ID", Type: provider.FieldText, Required: true},
+			{Key: "client_secret", Label: "Client Secret", Type: provider.FieldText, Required: true, Secret: true},
+			{Key: "webhook_id", Label: "Webhook ID", Type: provider.FieldText, Required: true,
+				Help: "创建 Webhook 后获得，用于校验回调签名"},
+			{Key: "brand_name", Label: "商家名称", Type: provider.FieldText, Help: "PayPal 支付页展示的名称"},
+			{Key: "sandbox", Label: "沙箱环境", Type: provider.FieldSwitch},
+		}, provider.ExchangeFields("USD")...),
+		New: func(opts provider.Options) (provider.Provider, error) {
+			var cfg Config
+			if err := opts.Decode(&cfg); err != nil {
+				return nil, err
+			}
+			return New(cfg)
+		},
 	})
 }
 

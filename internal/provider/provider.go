@@ -7,11 +7,7 @@ package provider
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"sort"
-	"strings"
-	"sync"
 
 	"epay/internal/model"
 	"epay/internal/money"
@@ -91,52 +87,6 @@ type Refunder interface {
 // Simulator 仅用于测试的模拟渠道实现此接口，收银台据此展示"模拟支付"按钮。
 type Simulator interface {
 	Simulated() bool
-}
-
-// Options 渠道配置的解码器（由配置文件中该渠道的 options 节点提供）。
-type Options interface {
-	Decode(v any) error
-}
-
-// Factory 根据配置构造渠道实例。
-type Factory func(opts Options) (Provider, error)
-
-var (
-	mu      sync.RWMutex
-	drivers = map[string]Factory{}
-)
-
-// Register 注册渠道驱动，通常在驱动包的 init() 中调用。
-func Register(name string, f Factory) {
-	mu.Lock()
-	defer mu.Unlock()
-	if _, dup := drivers[name]; dup {
-		panic("provider: 重复注册驱动 " + name)
-	}
-	drivers[name] = f
-}
-
-// New 按驱动名创建渠道实例。
-func New(driver string, opts Options) (Provider, error) {
-	mu.RLock()
-	f, ok := drivers[driver]
-	mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("未知的支付驱动 %q（可用：%s）", driver, strings.Join(Drivers(), ", "))
-	}
-	return f(opts)
-}
-
-// Drivers 返回已注册的驱动名称。
-func Drivers() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	names := make([]string, 0, len(drivers))
-	for n := range drivers {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // ErrNotSupported 渠道不支持某项操作。

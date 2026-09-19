@@ -51,6 +51,33 @@ CREATE TABLE IF NOT EXISTS orders (
 	UNIQUE (pid, out_trade_no)
 );
 CREATE INDEX IF NOT EXISTS idx_orders_notify ON orders (notify_status, next_notify_at);
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders (created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_paid ON orders (status, paid_at);
+
+CREATE TABLE IF NOT EXISTS merchants (
+	pid        TEXT PRIMARY KEY,
+	key        TEXT    NOT NULL,
+	name       TEXT    NOT NULL DEFAULT '',
+	enabled    INTEGER NOT NULL DEFAULT 1,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	type       TEXT    NOT NULL UNIQUE,
+	driver     TEXT    NOT NULL,
+	name       TEXT    NOT NULL DEFAULT '',
+	enabled    INTEGER NOT NULL DEFAULT 1,
+	options    TEXT    NOT NULL DEFAULT '{}',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 // columns 与 scanOrder 的字段顺序必须保持一致。
@@ -63,7 +90,7 @@ type Store struct {
 	db *sql.DB
 }
 
-var _ store.OrderStore = (*Store)(nil)
+var _ store.Store = (*Store)(nil)
 
 // Open 打开（必要时创建）数据库文件并执行建表。
 func Open(path string) (*Store, error) {
@@ -97,10 +124,7 @@ func (s *Store) Create(ctx context.Context, o *model.Order) error {
 		o.ClientIP, o.Device, o.Status, o.PayKind, o.PayContent, o.UpstreamRef, o.PayCurrency, o.PayAmount,
 		o.APITradeNo, o.Buyer, int64(o.RefundMoney), o.NotifyStatus, o.NotifyCount, unix(o.NextNotifyAt), o.NotifyError,
 		unix(o.CreatedAt), unix(o.ExpireAt), unix(o.PaidAt), now)
-	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
-		return store.ErrDuplicate
-	}
-	return err
+	return mapUnique(err)
 }
 
 func (s *Store) GetByTradeNo(ctx context.Context, tradeNo string) (*model.Order, error) {
@@ -207,6 +231,14 @@ func scanOrder(r scanner) (*model.Order, error) {
 	o.ExpireAt = fromUnix(expireAt)
 	o.PaidAt = fromUnix(paidAt)
 	return &o, nil
+}
+
+// mapUnique 把唯一约束冲突转换为 store.ErrDuplicate。
+func mapUnique(err error) error {
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return store.ErrDuplicate
+	}
+	return err
 }
 
 // 时间统一以 Unix 秒存储，零值时间存为 0。

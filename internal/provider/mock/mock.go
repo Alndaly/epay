@@ -20,8 +20,14 @@ type Mock struct {
 }
 
 func init() {
-	provider.Register("mock", func(provider.Options) (provider.Provider, error) {
-		return &Mock{pending: map[string]int64{}}, nil
+	provider.Register(provider.Driver{
+		Name:        "mock",
+		Title:       "模拟支付",
+		Description: "仅用于联调测试：收银台出现「模拟支付成功」按钮，任何人都能触发，切勿在生产环境启用",
+		DefaultType: "mock",
+		New: func(provider.Options) (provider.Provider, error) {
+			return &Mock{pending: map[string]int64{}}, nil
+		},
 	})
 }
 

@@ -41,12 +41,25 @@ type Stripe struct {
 }
 
 func init() {
-	provider.Register("stripe", func(opts provider.Options) (provider.Provider, error) {
-		var cfg Config
-		if err := opts.Decode(&cfg); err != nil {
-			return nil, err
-		}
-		return New(cfg)
+	provider.Register(provider.Driver{
+		Name:        "stripe",
+		Title:       "Stripe",
+		Description: "Stripe Checkout，支持银行卡、Apple Pay、Google Pay 等",
+		DefaultType: "stripe",
+		Webhook:     "在 Stripe Dashboard → Developers → Webhooks 添加端点，订阅 checkout.session.completed 与 checkout.session.async_payment_succeeded 事件",
+		Fields: append([]provider.Field{
+			{Key: "secret_key", Label: "Secret Key", Type: provider.FieldText, Required: true, Secret: true, Placeholder: "sk_live_..."},
+			{Key: "webhook_secret", Label: "Webhook 签名密钥", Type: provider.FieldText, Required: true, Secret: true, Placeholder: "whsec_..."},
+			{Key: "payment_method_types", Label: "支付方式", Type: provider.FieldTags, Placeholder: "card, alipay, wechat_pay",
+				Help: "留空则使用 Stripe 后台的支付方式设置"},
+		}, provider.ExchangeFields("USD")...),
+		New: func(opts provider.Options) (provider.Provider, error) {
+			var cfg Config
+			if err := opts.Decode(&cfg); err != nil {
+				return nil, err
+			}
+			return New(cfg)
+		},
 	})
 }
 

@@ -54,12 +54,36 @@ type Wechat struct {
 }
 
 func init() {
-	provider.Register("wechat", func(opts provider.Options) (provider.Provider, error) {
-		var cfg Config
-		if err := opts.Decode(&cfg); err != nil {
-			return nil, err
-		}
-		return New(cfg)
+	provider.Register(provider.Driver{
+		Name:        "wechat",
+		Title:       "微信支付",
+		Description: "微信支付 APIv3（微信支付公钥验签），支持 Native 扫码与 H5",
+		DefaultType: "wxpay",
+		Fields: []provider.Field{
+			{Key: "app_id", Label: "AppID", Type: provider.FieldText, Required: true, Placeholder: "wx0000000000000000",
+				Help: "与商户号绑定的公众号 / 小程序 / 移动应用 AppID"},
+			{Key: "mch_id", Label: "商户号", Type: provider.FieldText, Required: true, Placeholder: "1900000000"},
+			{Key: "api_v3_key", Label: "APIv3 密钥", Type: provider.FieldText, Required: true, Secret: true,
+				Help: "商户平台 → API 安全中设置的 32 位密钥"},
+			{Key: "serial_no", Label: "商户证书序列号", Type: provider.FieldText, Required: true},
+			{Key: "private_key", Label: "商户 API 私钥", Type: provider.FieldTextarea, Required: true, Secret: true,
+				Help: "apiclient_key.pem 的内容或文件路径"},
+			{Key: "public_key_id", Label: "微信支付公钥 ID", Type: provider.FieldText, Required: true, Placeholder: "PUB_KEY_ID_..."},
+			{Key: "public_key", Label: "微信支付公钥", Type: provider.FieldTextarea, Required: true,
+				Help: "pub_key.pem 的内容或文件路径"},
+			{Key: "mode", Label: "支付产品", Type: provider.FieldSelect, Default: "native", Options: []provider.FieldOption{
+				{Value: "native", Label: "Native 扫码"},
+				{Value: "h5", Label: "H5 跳转（需单独开通）"},
+				{Value: "auto", Label: "自动（手机 H5 / 其余扫码）"},
+			}},
+		},
+		New: func(opts provider.Options) (provider.Provider, error) {
+			var cfg Config
+			if err := opts.Decode(&cfg); err != nil {
+				return nil, err
+			}
+			return New(cfg)
+		},
 	})
 }
 

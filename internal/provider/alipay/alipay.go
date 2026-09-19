@@ -51,12 +51,32 @@ type Alipay struct {
 }
 
 func init() {
-	provider.Register("alipay", func(opts provider.Options) (provider.Provider, error) {
-		var cfg Config
-		if err := opts.Decode(&cfg); err != nil {
-			return nil, err
-		}
-		return New(cfg)
+	provider.Register(provider.Driver{
+		Name:        "alipay",
+		Title:       "支付宝",
+		Description: "支付宝开放平台（公钥模式 RSA2），支持电脑网站、手机网站与当面付扫码",
+		DefaultType: "alipay",
+		Fields: []provider.Field{
+			{Key: "app_id", Label: "AppID", Type: provider.FieldText, Required: true, Placeholder: "2021000000000000"},
+			{Key: "private_key", Label: "应用私钥", Type: provider.FieldTextarea, Required: true, Secret: true,
+				Help: "开放平台密钥工具生成的应用私钥，支持 PEM 或裸 Base64，也可填写服务器上的文件路径"},
+			{Key: "alipay_public_key", Label: "支付宝公钥", Type: provider.FieldTextarea, Required: true,
+				Help: "开放平台「接口加签方式」中的支付宝公钥（注意不是应用公钥）"},
+			{Key: "mode", Label: "支付产品", Type: provider.FieldSelect, Default: "auto", Options: []provider.FieldOption{
+				{Value: "auto", Label: "自动（PC 电脑网站 / 手机网站）"},
+				{Value: "page", Label: "电脑网站支付"},
+				{Value: "wap", Label: "手机网站支付"},
+				{Value: "qrcode", Label: "当面付扫码"},
+			}, Help: "个人开发者通常只能开通当面付，请选择「当面付扫码」"},
+			{Key: "sandbox", Label: "沙箱环境", Type: provider.FieldSwitch},
+		},
+		New: func(opts provider.Options) (provider.Provider, error) {
+			var cfg Config
+			if err := opts.Decode(&cfg); err != nil {
+				return nil, err
+			}
+			return New(cfg)
+		},
 	})
 }
 

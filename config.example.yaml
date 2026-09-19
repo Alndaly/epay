@@ -1,5 +1,8 @@
 # 统一支付网关配置示例
 # 复制为 config.yaml 后修改。任意值都可以写成 ${ENV_NAME} 从环境变量读取（推荐用于密钥）。
+#
+# 商户与支付渠道推荐在管理后台（{base_url}/admin/）中可视化配置并即时生效。
+# 本文件中的 merchants / channels 只在首次启动（数据库为空）时导入一次，之后以数据库为准。
 
 server:
   listen: ":8080"
@@ -19,13 +22,18 @@ log:
   level: info   # debug | info | warn | error
   format: text  # text | json
 
-# 接入的商户。new-api 中「易支付商户ID」填 pid，「易支付商户密钥」填 key。
+# 管理后台账号。password 为空时不启用管理后台；修改密码后所有已登录会话立即失效。
+admin:
+  username: admin
+  password: "${ADMIN_PASSWORD}"   # 至少 8 位
+
+# 接入的商户（可选，也可在管理后台创建）。new-api 中「易支付商户ID」填 pid，「易支付商户密钥」填 key。
 merchants:
   - pid: "1001"
     key: "${EPAY_MERCHANT_KEY}"   # 至少 16 位的随机字符串，可用 openssl rand -hex 16 生成
     name: "new-api"
 
-# 支付方式。
+# 支付方式（可选，也可在管理后台创建）。
 #   type   ：商户下单时传入的易支付 type（new-api「支付方式」配置里的 type 需与之对应）
 #   driver ：上游渠道驱动 alipay | wechat | paypal | stripe | mock
 #   enabled：设为 false 可临时停用

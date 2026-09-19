@@ -74,3 +74,13 @@ func (e *Exchange) Validate(defaultCurrency string) error {
 func (e *Exchange) Convert(c money.Cents) int64 {
 	return int64(c.Convert(e.Rate))
 }
+
+// ExchangeFields 外币通道共用的币种与汇率配置项。
+func ExchangeFields(defaultCurrency string) []Field {
+	return []Field{
+		{Key: "currency", Label: "扣款币种", Type: FieldText, Default: defaultCurrency,
+			Placeholder: defaultCurrency, Help: "ISO 4217 币种代码，如 USD / EUR / HKD"},
+		{Key: "exchange_rate", Label: "汇率", Type: FieldNumber, Required: true,
+			Placeholder: "0.14", Help: "1 元人民币可兑换的扣款币种数量，订单金额按此换算"},
+	}
+}

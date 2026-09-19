@@ -14,7 +14,7 @@ import (
 
 	"epay/internal/epay"
 	"epay/internal/gateway"
-	"epay/internal/provider"
+	"epay/internal/model"
 	_ "epay/internal/provider/mock"
 	"epay/internal/store/sqlite"
 )
@@ -160,22 +160,20 @@ func newTestHandler(t *testing.T) http.Handler {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	mock, err := provider.New("mock", nil)
-	if err != nil {
+	ctx := t.Context()
+	if err := st.CreateMerchant(ctx, &model.Merchant{PID: testPID, Key: testKey, Name: "test", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateChannel(ctx, &model.ChannelConfig{Type: "mock", Driver: "mock", Name: "模拟支付", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, err := gateway.New(st, gateway.Options{
-		BaseURL:   "http://gateway.test",
-		Merchants: []gateway.Merchant{{PID: testPID, Key: testKey, Name: "test"}},
-		Channels:  []gateway.Channel{{Type: "mock", Name: "模拟支付", Provider: mock}},
-		Logger:    log,
-	})
+	svc, err := gateway.New(ctx, st, gateway.Options{BaseURL: "http://gateway.test", Logger: log})
 	if err != nil {
 		t.Fatal(err)
 	}
-	go svc.RunNotifier(t.Context())
-	return New(svc, log, false)
+	go svc.RunNotifier(ctx)
+	return New(svc, log, Options{})
 }
 
 func signedOrder(outTradeNo, amount, notifyURL string) url.Values {

@@ -26,27 +26,11 @@ import (
 	"epay/internal/store"
 )
 
-// Merchant 接入网关的商户（例如 new-api）。
-type Merchant struct {
-	PID  string
-	Key  string
-	Name string
-}
-
-// Channel 一个可用的支付方式：易支付 type 与上游渠道实例的绑定。
-type Channel struct {
-	Type     string // 易支付 type，如 alipay / wxpay / paypal / stripe
-	Name     string // 展示名称
-	Provider provider.Provider
-}
-
 // Options 网关配置。
 type Options struct {
 	BaseURL       string        // 网关对外访问地址，用于生成上游回调与跳转地址
 	OrderTTL      time.Duration // 订单有效期
 	NotifyTimeout time.Duration // 单次商户通知超时
-	Merchants     []Merchant
-	Channels      []Channel
 	Logger        *slog.Logger
 }
 
@@ -54,20 +38,21 @@ type Options struct {
 const syncInterval = 3 * time.Second
 
 type Service struct {
-	store     store.OrderStore
-	baseURL   string
-	orderTTL  time.Duration
-	merchants map[string]Merchant
-	channels  map[string]*Channel
-	notifier  *Notifier
-	log       *slog.Logger
+	store    store.Store
+	baseURL  string
+	orderTTL time.Duration
+	notifier *Notifier
+	log      *slog.Logger
+
+	current  atomic.Pointer[snapshot] // 当前生效的商户与渠道配置，见 Reload
+	reloadMu sync.Mutex
 
 	lastSync  sync.Map     // trade_no -> time.Time，主动查询节流
 	lastPrune atomic.Int64 // 上次清理 lastSync 的时间（Unix 秒）
 }
 
-// New 创建网关服务。
-func New(st store.OrderStore, opts Options) (*Service, error) {
+// New 创建网关服务并从数据库加载商户与渠道配置。
+func New(ctx context.Context, st store.Store, opts Options) (*Service, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -78,27 +63,16 @@ func New(st store.OrderStore, opts Options) (*Service, error) {
 		opts.NotifyTimeout = 10 * time.Second
 	}
 	s := &Service{
-		store:     st,
-		baseURL:   strings.TrimRight(opts.BaseURL, "/"),
-		orderTTL:  opts.OrderTTL,
-		merchants: make(map[string]Merchant),
-		channels:  make(map[string]*Channel),
-		log:       opts.Logger,
+		store:    st,
+		baseURL:  strings.TrimRight(opts.BaseURL, "/"),
+		orderTTL: opts.OrderTTL,
+		log:      opts.Logger,
 	}
-	for _, m := range opts.Merchants {
-		if m.PID == "" || len(m.Key) < 16 {
-			return nil, fmt.Errorf("商户 %q 配置无效：pid 不能为空且 key 至少 16 位", m.PID)
-		}
-		s.merchants[m.PID] = m
-	}
-	for i := range opts.Channels {
-		ch := &opts.Channels[i]
-		if _, dup := s.channels[ch.Type]; dup {
-			return nil, fmt.Errorf("支付方式 %q 重复配置", ch.Type)
-		}
-		s.channels[ch.Type] = ch
-	}
+	s.current.Store(&snapshot{byID: map[int64]*Channel{}})
 	s.notifier = newNotifier(st, s.merchantParams, opts.NotifyTimeout, opts.Logger)
+	if err := s.Reload(ctx); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -107,12 +81,6 @@ func (s *Service) RunNotifier(ctx context.Context) { s.notifier.Run(ctx) }
 
 // BaseURL 网关对外访问地址（不含末尾斜杠）。
 func (s *Service) BaseURL() string { return s.baseURL }
-
-// Channel 按易支付 type 获取支付方式。
-func (s *Service) Channel(typ string) (*Channel, bool) {
-	ch, ok := s.channels[typ]
-	return ch, ok
-}
 
 // ---------------------------------------------------------------------------
 // 下单
@@ -129,9 +97,9 @@ type CreateRequest struct {
 // 同一商户订单号重复提交时返回原订单（幂等），金额或支付方式不一致则报错。
 func (s *Service) CreateOrder(ctx context.Context, req CreateRequest) (*model.Order, error) {
 	p := req.Params
-	m, ok := s.merchants[p["pid"]]
-	if !ok {
-		return nil, errorf("商户不存在")
+	m, ok := s.merchant(p["pid"])
+	if !ok || !m.Enabled {
+		return nil, errorf("商户不存在或已停用")
 	}
 	if !epay.Verify(p, m.Key) {
 		return nil, errorf("签名校验失败")
@@ -141,8 +109,8 @@ func (s *Service) CreateOrder(ctx context.Context, req CreateRequest) (*model.Or
 	if err != nil {
 		return nil, err
 	}
-	ch, ok := s.channels[o.Type]
-	if !ok {
+	ch, ok := s.Channel(o.Type)
+	if !ok || !ch.Enabled {
 		return nil, errorf("不支持的支付方式：%s", o.Type)
 	}
 
@@ -278,7 +246,7 @@ func (s *Service) HandleNotify(ctx context.Context, ch *Channel, r *http.Request
 }
 
 // Sync 主动向上游查询待支付订单的状态（带节流），返回最新订单。
-// 用于买家跳回、收银台轮询等场景，作为异步通知丢失或延迟时的兜底。
+// 用于买家跳回、收银台轮询等场景，作为异步通知丢失或延迟时的兜底；查询失败时静默返回原订单。
 func (s *Service) Sync(ctx context.Context, o *model.Order) (*model.Order, error) {
 	if o.Paid() || !o.HasPayment() {
 		return o, nil
@@ -289,15 +257,23 @@ func (s *Service) Sync(ctx context.Context, o *model.Order) (*model.Order, error
 		return o, nil
 	}
 	s.lastSync.Store(o.TradeNo, now)
+	updated, err := s.query(ctx, o)
+	if err != nil && !IsPublic(err) {
+		s.log.Warn("主动查询上游失败", "trade_no", o.TradeNo, "err", err)
+		return o, nil // 查询失败不影响展示，等待异步通知
+	}
+	return updated, err
+}
 
-	ch, ok := s.channels[o.Type]
+// query 向上游查询订单，已支付则入账。
+func (s *Service) query(ctx context.Context, o *model.Order) (*model.Order, error) {
+	ch, ok := s.Channel(o.Type)
 	if !ok {
-		return o, nil
+		return o, errorf("支付方式 %s 不存在或初始化失败", o.Type)
 	}
 	pay, err := ch.Provider.Query(ctx, o)
 	if err != nil {
-		s.log.Warn("主动查询上游失败", "trade_no", o.TradeNo, "err", err)
-		return o, nil // 查询失败不影响展示，等待异步通知
+		return o, err
 	}
 	if !pay.Paid {
 		return o, nil
@@ -373,16 +349,16 @@ func (s *Service) Order(ctx context.Context, tradeNo string) (*model.Order, erro
 }
 
 // AuthMerchant 以明文密钥校验商户身份（易支付 api.php 的鉴权方式）。
-func (s *Service) AuthMerchant(pid, key string) (Merchant, error) {
-	m, ok := s.merchants[pid]
-	if !ok || subtle.ConstantTimeCompare([]byte(m.Key), []byte(key)) != 1 {
-		return Merchant{}, errorf("商户 ID 或密钥错误")
+func (s *Service) AuthMerchant(pid, key string) (model.Merchant, error) {
+	m, ok := s.merchant(pid)
+	if !ok || !m.Enabled || subtle.ConstantTimeCompare([]byte(m.Key), []byte(key)) != 1 {
+		return model.Merchant{}, errorf("商户 ID 或密钥错误")
 	}
 	return m, nil
 }
 
 // MerchantOrder 查询商户自己的订单，tradeNo 与 outTradeNo 二选一。
-func (s *Service) MerchantOrder(ctx context.Context, m Merchant, tradeNo, outTradeNo string) (*model.Order, error) {
+func (s *Service) MerchantOrder(ctx context.Context, m model.Merchant, tradeNo, outTradeNo string) (*model.Order, error) {
 	var (
 		o   *model.Order
 		err error
@@ -405,7 +381,7 @@ func (s *Service) MerchantOrder(ctx context.Context, m Merchant, tradeNo, outTra
 }
 
 // Refund 对已支付订单发起（部分）退款。
-func (s *Service) Refund(ctx context.Context, m Merchant, tradeNo, outTradeNo, amountStr string) error {
+func (s *Service) Refund(ctx context.Context, m model.Merchant, tradeNo, outTradeNo, amountStr string) error {
 	o, err := s.MerchantOrder(ctx, m, tradeNo, outTradeNo)
 	if err != nil {
 		return err
@@ -417,9 +393,9 @@ func (s *Service) Refund(ctx context.Context, m Merchant, tradeNo, outTradeNo, a
 	if err != nil || amount <= 0 {
 		return errorf("退款金额不正确")
 	}
-	ch, ok := s.channels[o.Type]
+	ch, ok := s.Channel(o.Type)
 	if !ok {
-		return errorf("支付方式 %s 已停用", o.Type)
+		return errorf("支付方式 %s 不存在或初始化失败", o.Type)
 	}
 	refunder, ok := ch.Provider.(provider.Refunder)
 	if !ok {
@@ -470,7 +446,7 @@ func (s *Service) ReturnURL(o *model.Order) (string, error) {
 
 // merchantParams 生成回传给商户的易支付标准参数（已签名）。
 func (s *Service) merchantParams(o *model.Order) (map[string]string, error) {
-	m, ok := s.merchants[o.PID]
+	m, ok := s.merchant(o.PID)
 	if !ok {
 		return nil, fmt.Errorf("商户 %s 已不存在", o.PID)
 	}

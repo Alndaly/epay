@@ -1,9 +1,14 @@
 // Package config 加载 YAML 配置文件。
 //
+// 配置文件只保存"基础设施"级别的配置（监听地址、数据库、管理员账号等）；
+// 商户与支付渠道保存在数据库中并通过管理后台维护。配置文件中的 merchants / channels
+// 仅在数据库为空时（首次启动）导入一次，便于从纯配置文件部署平滑迁移。
+//
 // 配置值中可以使用 ${ENV_NAME} 引用环境变量，便于把密钥放在环境变量 / Docker Secret 中。
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,8 +24,15 @@ type Config struct {
 	Database  Database   `yaml:"database"`
 	Order     Order      `yaml:"order"`
 	Log       Log        `yaml:"log"`
-	Merchants []Merchant `yaml:"merchants"`
-	Channels  []Channel  `yaml:"channels"`
+	Admin     Admin      `yaml:"admin"`
+	Merchants []Merchant `yaml:"merchants"` // 仅首次启动时导入数据库
+	Channels  []Channel  `yaml:"channels"`  // 仅首次启动时导入数据库
+}
+
+// Admin 管理后台账号。Password 为空时不启用管理后台。
+type Admin struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type Server struct {
@@ -63,22 +75,16 @@ type Channel struct {
 // IsEnabled 渠道是否启用。
 func (c *Channel) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
 
-// Decode 实现 provider.Options，把 options 节点解码为驱动自己的配置结构。
-// 使用 KnownFields 严格模式，拼错的配置项会直接报错而不是被静默忽略。
-func (c *Channel) Decode(v any) error {
+// OptionsJSON 把 options 节点转换为 JSON，以便存入数据库。
+func (c *Channel) OptionsJSON() (json.RawMessage, error) {
 	if c.Options.Kind == 0 {
-		return nil
+		return json.RawMessage("{}"), nil
 	}
-	data, err := yaml.Marshal(&c.Options)
-	if err != nil {
-		return err
+	var v map[string]any
+	if err := c.Options.Decode(&v); err != nil {
+		return nil, fmt.Errorf("渠道 %s 的 options 格式错误: %w", c.Type, err)
 	}
-	dec := yaml.NewDecoder(strings.NewReader(string(data)))
-	dec.KnownFields(true)
-	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("渠道 %s 配置错误: %w", c.Type, err)
-	}
-	return nil
+	return json.Marshal(v)
 }
 
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -120,6 +126,9 @@ func (c *Config) setDefaults() {
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
+	if c.Admin.Username == "" {
+		c.Admin.Username = "admin"
+	}
 	c.Server.BaseURL = strings.TrimRight(c.Server.BaseURL, "/")
 }
 
@@ -127,11 +136,8 @@ func (c *Config) validate() error {
 	if !strings.HasPrefix(c.Server.BaseURL, "http://") && !strings.HasPrefix(c.Server.BaseURL, "https://") {
 		return errors.New("server.base_url 必须配置为网关的公网访问地址（http/https 开头）")
 	}
-	if len(c.Merchants) == 0 {
-		return errors.New("至少需要配置一个商户 merchants")
-	}
-	if len(c.Channels) == 0 {
-		return errors.New("至少需要配置一个支付渠道 channels")
+	if c.Admin.Password != "" && len(c.Admin.Password) < 8 {
+		return errors.New("admin.password 至少 8 位")
 	}
 	for _, ch := range c.Channels {
 		if ch.Type == "" || ch.Driver == "" {

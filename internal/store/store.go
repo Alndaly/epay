@@ -54,6 +54,69 @@ type OrderStore interface {
 	ReserveRefund(ctx context.Context, tradeNo string, amount money.Cents) (bool, error)
 	// ReleaseRefund 上游退款失败时回滚 ReserveRefund。
 	ReleaseRefund(ctx context.Context, tradeNo string, amount money.Cents) error
+}
 
+// OrderFilter 管理后台的订单列表筛选条件。
+type OrderFilter struct {
+	Keyword string             // 模糊匹配平台订单号 / 商户订单号 / 上游交易号 / 商品名
+	Status  *model.OrderStatus // 为空表示不限
+	Type    string
+	PID     string
+	Notify  *model.NotifyStatus
+	Offset  int
+	Limit   int
+}
+
+// DailyStat 按天汇总的已支付订单。
+type DailyStat struct {
+	Date   string      `json:"date"` // 2006-01-02（服务器本地时区）
+	Count  int         `json:"count"`
+	Amount money.Cents `json:"amount"`
+}
+
+// Summary 管理后台概览数据。
+type Summary struct {
+	TodayOrders   int         `json:"todayOrders"`   // 今日下单数
+	TodayPaid     int         `json:"todayPaid"`     // 今日支付成功数
+	TodayAmount   money.Cents `json:"todayAmount"`   // 今日成交金额
+	TotalAmount   money.Cents `json:"totalAmount"`   // 累计成交金额
+	NotifyPending int         `json:"notifyPending"` // 待投递 / 重试中的商户通知
+	NotifyFailed  int         `json:"notifyFailed"`  // 已放弃的商户通知
+	Daily         []DailyStat `json:"daily"`         // 最近 N 天成交趋势（含无数据的日期）
+}
+
+// AdminStore 管理后台使用的查询与运维操作。
+type AdminStore interface {
+	ListOrders(ctx context.Context, f OrderFilter) ([]*model.Order, int, error)
+	Summary(ctx context.Context, now time.Time, days int) (*Summary, error)
+	// ResetNotify 重置通知状态并立即排队（用于手动补发通知）。仅对已支付订单生效。
+	ResetNotify(ctx context.Context, tradeNo string) (bool, error)
+}
+
+// ConfigStore 商户、支付渠道与系统设置的持久化。
+type ConfigStore interface {
+	ListMerchants(ctx context.Context) ([]model.Merchant, error)
+	// CreateMerchant pid 重复时返回 ErrDuplicate。
+	CreateMerchant(ctx context.Context, m *model.Merchant) error
+	UpdateMerchant(ctx context.Context, m *model.Merchant) error
+	DeleteMerchant(ctx context.Context, pid string) error
+
+	ListChannels(ctx context.Context) ([]model.ChannelConfig, error)
+	GetChannel(ctx context.Context, id int64) (*model.ChannelConfig, error)
+	// CreateChannel type 重复时返回 ErrDuplicate。
+	CreateChannel(ctx context.Context, c *model.ChannelConfig) error
+	UpdateChannel(ctx context.Context, c *model.ChannelConfig) error
+	DeleteChannel(ctx context.Context, id int64) error
+
+	// GetSetting 键不存在时返回空字符串。
+	GetSetting(ctx context.Context, key string) (string, error)
+	SetSetting(ctx context.Context, key, value string) error
+}
+
+// Store 完整的存储能力。
+type Store interface {
+	OrderStore
+	AdminStore
+	ConfigStore
 	Close() error
 }
