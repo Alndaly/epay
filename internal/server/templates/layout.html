@@ -1,0 +1,52 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.}}</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1f2328; --muted: #6b7280;
+    --line: #e5e7eb; --primary: #1677ff; --success: #16a34a; --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --card: #1b1e24; --text: #e6e8eb; --muted: #9aa1ab; --line: #2c313a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text); padding: 16px;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 400px; background: var(--card); border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.08); padding: 28px 24px; text-align: center;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .amount { font-size: 34px; font-weight: 600; margin: 12px 0 4px; font-variant-numeric: tabular-nums; }
+  .amount small { font-size: 18px; margin-right: 2px; }
+  .qrcode { width: 220px; height: 220px; margin: 18px auto 8px; padding: 10px; background: #fff; border-radius: 12px; border: 1px solid var(--line); }
+  .qrcode img { width: 100%; height: 100%; display: block; }
+  .btn {
+    display: block; width: 100%; margin-top: 16px; padding: 12px; border: 0; border-radius: 10px;
+    background: var(--primary); color: #fff; font-size: 15px; text-decoration: none; cursor: pointer;
+  }
+  .btn.secondary { background: transparent; color: var(--primary); border: 1px solid var(--line); }
+  .meta { margin-top: 20px; padding-top: 14px; border-top: 1px dashed var(--line); text-align: left; font-size: 13px; }
+  .meta div { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .meta span:first-child { color: var(--muted); flex-shrink: 0; }
+  .meta span:last-child { word-break: break-all; text-align: right; }
+  .status { margin-top: 12px; font-size: 14px; }
+  .status.ok { color: var(--success); }
+  .status.err { color: var(--danger); }
+</style>
+</head>
+<body>
+{{end}}
+
+{{define "foot"}}
+</body>
+</html>
+{{end}}

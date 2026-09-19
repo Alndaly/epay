@@ -1,0 +1,13 @@
+services:
+  epay:
+    build: .
+    container_name: epay
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env            # 存放 ${...} 引用的密钥，不要提交到仓库
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./certs:/app/certs:ro   # 微信支付等证书文件
+      - ./data:/app/data        # SQLite 数据库

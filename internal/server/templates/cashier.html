@@ -1,0 +1,87 @@
+{{define "cashier.html"}}{{template "head" "收银台"}}
+<main class="card">
+  <h1>{{.ChannelName}}</h1>
+  <div class="muted">{{.Order.Name}}</div>
+  <div class="amount"><small>¥</small>{{.Order.Money}}</div>
+  {{if .ForeignAmount}}<div class="muted">实付 {{.ForeignAmount}}</div>{{end}}
+
+  {{if .QRCode}}
+    <div class="qrcode"><img src="/pay/{{.Order.TradeNo}}/qrcode.png" alt="支付二维码"></div>
+    <div class="muted">
+      {{if .Mobile}}请截图或长按保存二维码，使用{{.ChannelName}}扫码支付{{else}}请使用{{.ChannelName}}扫一扫完成支付{{end}}
+    </div>
+    {{if and .Mobile .AppURL}}<a class="btn secondary" href="{{.AppURL}}">打开{{.ChannelName}} App 支付</a>{{end}}
+  {{else}}
+    <a class="btn" href="{{.PayURL}}">前往{{.ChannelName}}支付</a>
+  {{end}}
+
+  {{if .Mock}}
+    <button class="btn" id="mock-pay" type="button">模拟支付成功（测试渠道）</button>
+  {{end}}
+
+  <div class="status" id="status">等待支付… <span id="countdown"></span></div>
+
+  <div class="meta">
+    <div><span>商户订单号</span><span>{{.Order.OutTradeNo}}</span></div>
+    <div><span>平台订单号</span><span>{{.Order.TradeNo}}</span></div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var tradeNo = {{.Order.TradeNo}};
+  var expireAt = {{.ExpireAt}};
+  var statusEl = document.getElementById("status");
+  var countdownEl = document.getElementById("countdown");
+  var done = false;
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = "status " + (cls || "");
+  }
+
+  // 倒计时
+  function tick() {
+    if (done) return;
+    var left = Math.max(0, Math.floor((expireAt - Date.now()) / 1000));
+    var m = Math.floor(left / 60), s = left % 60;
+    countdownEl.textContent = "（剩余 " + m + ":" + (s < 10 ? "0" : "") + s + "）";
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  // 轮询支付状态，成功后跳回商户
+  function poll() {
+    if (done) return;
+    fetch("/pay/" + tradeNo + "/status", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status === "paid") {
+          done = true;
+          setStatus("支付成功，正在返回商户…", "ok");
+          setTimeout(function () { location.href = d.return; }, 800);
+        } else if (d.status === "expired") {
+          done = true;
+          setStatus("订单已过期，请返回商户重新下单", "err");
+        } else {
+          setTimeout(poll, 2500);
+        }
+      })
+      .catch(function () { setTimeout(poll, 5000); });
+  }
+  setTimeout(poll, 2000);
+
+  var mockBtn = document.getElementById("mock-pay");
+  if (mockBtn) {
+    mockBtn.addEventListener("click", function () {
+      mockBtn.disabled = true;
+      fetch("/notify/" + encodeURIComponent({{.Order.Type}}), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "trade_no=" + encodeURIComponent(tradeNo)
+      }).then(poll);
+    });
+  }
+})();
+</script>
+{{template "foot"}}{{end}}
