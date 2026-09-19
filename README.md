@@ -17,7 +17,8 @@
 - **可靠通知**：通知队列持久化在数据库中，失败按 15s → 15s → 30s → 3m → … → 15h 重试共 12 次，进程重启不丢失。
 - **双重确认**：上游异步通知 + 买家跳回 / 收银台轮询时主动查单，任一路径先到都能正确入账；重复回调严格幂等。
 - **资金安全**：金额全程以"分"为整数计算；入账前核对上游实付金额与币种；退款先原子占用额度再请求上游，防止超额退款。
-- **易扩展**：新增渠道只需实现一个接口并注册，无需改动已有代码。
+- **可视化管理后台**：`/admin/` 下配置商户与支付渠道（即时生效、无需重启），查看成交统计与订单，一键补发通知、主动查单。
+- **易扩展**：新增渠道只需实现一个接口并声明配置字段，后台表单自动生成，无需改动已有代码。
 
 ## 架构
 
@@ -45,6 +46,8 @@ internal/
     alipay/ wechat/ paypal/ stripe/ mock/
     keyutil/              RSA 密钥解析与 SHA256withRSA
   server/                 HTTP 路由、易支付接口、收银台页面
+  admin/                  管理后台接口（登录会话、渠道 / 商户 / 订单管理）
+web/                      管理后台前端（Vite + React + shadcn/ui + Tailwind CSS），构建产物嵌入二进制
 ```
 
 **一笔订单的生命周期**
@@ -58,19 +61,22 @@ internal/
 ## 快速开始
 
 ```bash
-cp config.example.yaml config.yaml   # 按注释修改
-go run ./cmd/epay -config config.yaml
+cp config.example.yaml config.yaml   # 至少修改 server.base_url 与 admin.password
+make build                            # 构建前端并编译，输出 bin/epay（需要 Go 1.25+、pnpm）
+./bin/epay -config config.yaml
 ```
 
-Docker：
+启动后访问 `{base_url}/admin/` 登录管理后台，在「支付渠道」中接入支付宝 / 微信 / PayPal / Stripe，在「商户」中创建商户并获取对接信息。
+
+Docker（无需本地安装 Node / Go）：
 
 ```bash
 cp config.example.yaml config.yaml
-echo "EPAY_MERCHANT_KEY=$(openssl rand -hex 16)" > .env
+echo "ADMIN_PASSWORD=$(openssl rand -hex 8)" > .env
 docker compose up -d
 ```
 
-> 想先跑通流程？在 `config.yaml` 中把 `mock` 渠道设为 `enabled: true`，在收银台点「模拟支付成功」即可走完整个回调与通知流程。
+> 想先跑通流程？在后台新建一个「模拟支付」渠道，收银台会出现「模拟支付成功」按钮，可以走完整个回调与通知流程（生产环境务必删除）。
 
 网关必须通过公网 HTTPS 地址（`server.base_url`）访问，上游渠道才能回调。建议置于 Nginx / Caddy 之后并开启 `trust_proxy`。
 
@@ -81,10 +87,10 @@ docker compose up -d
 | new-api 设置项 | 填写 |
 | --- | --- |
 | 支付地址 | `server.base_url`，如 `https://pay.example.com`（不要带 `/submit.php`） |
-| 易支付商户 ID | `merchants[].pid` |
-| 易支付商户密钥 | `merchants[].key` |
+| 易支付商户 ID | 后台「商户」页面的商户 ID |
+| 易支付商户密钥 | 后台「商户」页面的密钥（点击「查看密钥」可复制） |
 | 回调地址 | new-api 自身的地址（new-api 会据此生成 `notify_url`） |
-| 充值方式 | 每项的 `type` 与网关 `channels[].type` 一致，例如： |
+| 充值方式 | 每项的 `type` 与后台渠道的「支付方式标识」一致，例如： |
 
 ```json
 [
@@ -97,9 +103,22 @@ docker compose up -d
 
 > new-api 按其"充值价格"以人民币计算 `money`；PayPal / Stripe 渠道会按 `exchange_rate` 换算为外币扣款，收银台会显示实付外币金额。
 
+## 管理后台
+
+| 页面 | 功能 |
+| --- | --- |
+| 概览 | 今日 / 累计成交、渠道健康状态、通知积压、30 天成交趋势、对接地址一键复制 |
+| 订单 | 按订单号 / 商品名搜索，按支付方式、支付状态、通知状态筛选；详情页可补发通知、向上游主动查单 |
+| 支付渠道 | 按驱动自动生成配置表单；保存前实际初始化渠道校验密钥；启用 / 停用即时生效 |
+| 商户 | 新建商户自动生成密钥并展示 new-api 对接信息；查看 / 重置密钥；启用 / 停用 |
+
+- **配置存储**：商户与渠道保存在数据库中。`config.yaml` 中的 `merchants` / `channels` 只在首次启动（数据库为空）时导入一次，便于从纯配置文件部署迁移。
+- **安全**：登录会话为 HMAC 签名的 HttpOnly + SameSite=Strict Cookie；写接口要求 JSON 请求体以防 CSRF；同一 IP 15 分钟内失败 10 次即锁定；修改 `admin.password` 后所有会话立即失效；渠道密钥在接口中脱敏返回，未修改时沿用原值。
+- **停用 vs 删除**：停用的渠道不再接受新订单，但仍会处理存量订单的上游回调；删除则不再处理，建议优先停用。
+
 ## 渠道配置要点
 
-完整示例见 [config.example.yaml](config.example.yaml)。所有密钥字段既可以直接填内容，也可以填文件路径。
+所有密钥字段既可以直接填内容，也可以填服务器上的文件路径。
 
 - **支付宝**：开放平台应用须使用「公钥」加签模式（暂不支持公钥证书模式）。`mode` 可选 `auto` / `page` / `wap` / `qrcode`，个人开发者通常只能开通当面付，请使用 `qrcode`。
 - **微信支付**：使用 APIv3 +「微信支付公钥」验签（新商户默认）。`mode: native` 为扫码（所有商户可用）；`h5` 需在商户平台单独开通。
@@ -153,16 +172,22 @@ docker compose up -d
 ## 扩展新渠道
 
 1. 在 `internal/provider/<name>/` 中实现 `provider.Provider`（`Pay` / `ParseNotify` / `AckNotify` / `Query`），支持退款则再实现 `provider.Refunder`；
-2. 在 `init()` 中 `provider.Register("<name>", factory)`，factory 通过 `opts.Decode(&cfg)` 读取自己的配置；
+2. 在 `init()` 中 `provider.Register(provider.Driver{...})`：声明名称、说明与配置字段 `Fields`（类型、是否必填、是否敏感），`New` 中通过 `opts.Decode(&cfg)` 读取配置；
 3. 在 `internal/provider/all/all.go` 中加一行匿名导入；
-4. 在配置文件 `channels` 中使用 `driver: <name>`。
+4. 管理后台会根据 `Fields` 自动生成配置表单，前端无需改动。
 
 ## 开发
 
 ```bash
-go test ./...        # 单元测试 + 端到端测试 + new-api 兼容性测试
-make build           # 输出 bin/epay
+make run    # 启动网关（读取 config.yaml，需将 server.listen 设为 :8080）
+make dev    # 另开终端启动前端开发服务器 http://localhost:5173/admin/，接口自动代理到网关
+make test   # Go 单元 / 端到端 / new-api 兼容性测试 + 前端类型检查
+make fmt    # gofmt + prettier
 ```
+
+前端约定：页面只组合 shadcn/ui 组件（Card、Table、Field、Item、Empty…），不手写样式 class；
+页面骨架直接沿用官方区块 dashboard-01 与 login-03。`src/components/ui` 由 shadcn CLI 生成，请勿手改，
+需要新组件时执行 `pnpm dlx shadcn@latest add <组件名>`。
 
 ## 注意事项
 

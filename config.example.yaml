@@ -27,83 +27,88 @@ admin:
   username: admin
   password: "${ADMIN_PASSWORD}"   # 至少 8 位
 
-# 接入的商户（可选，也可在管理后台创建）。new-api 中「易支付商户ID」填 pid，「易支付商户密钥」填 key。
-merchants:
-  - pid: "1001"
-    key: "${EPAY_MERCHANT_KEY}"   # 至少 16 位的随机字符串，可用 openssl rand -hex 16 生成
-    name: "new-api"
+# ---------------------------------------------------------------------------
+# 以下 merchants / channels 为可选项，推荐直接在管理后台创建。
+# 如需从配置文件导入（仅数据库为空的首次启动生效），取消注释并填写。
+# ---------------------------------------------------------------------------
+
+# 接入的商户。new-api 中「易支付商户ID」填 pid，「易支付商户密钥」填 key。
+# merchants:
+#   - pid: "1001"
+#     key: "${EPAY_MERCHANT_KEY}"   # 至少 16 位的随机字符串，可用 openssl rand -hex 16 生成
+#     name: "new-api"
 
 # 支付方式（可选，也可在管理后台创建）。
 #   type   ：商户下单时传入的易支付 type（new-api「支付方式」配置里的 type 需与之对应）
 #   driver ：上游渠道驱动 alipay | wechat | paypal | stripe | mock
 #   enabled：设为 false 可临时停用
 #   options：驱动私有配置（拼写错误的字段会在启动时报错）
-channels:
-  # ---------------- 支付宝 ----------------
-  # 开放平台 → 应用 → 开发设置：接口加签方式选择「公钥」模式，填写应用私钥与支付宝公钥。
-  - type: alipay
-    driver: alipay
-    name: 支付宝
-    options:
-      app_id: "2021000000000000"
-      private_key: "${ALIPAY_PRIVATE_KEY}"          # 应用私钥：内容或文件路径均可
-      alipay_public_key: "${ALIPAY_PUBLIC_KEY}"     # 支付宝公钥（不是应用公钥）
-      # auto：PC 用电脑网站支付、手机用手机网站支付；
-      # page / wap：固定使用电脑 / 手机网站支付；
-      # qrcode：当面付扫码（个人开发者最容易开通）
-      mode: auto
-      sandbox: false
+# channels:
+#   # ---------------- 支付宝 ----------------
+#   # 开放平台 → 应用 → 开发设置：接口加签方式选择「公钥」模式，填写应用私钥与支付宝公钥。
+#   - type: alipay
+#     driver: alipay
+#     name: 支付宝
+#     options:
+#       app_id: "2021000000000000"
+#       private_key: "${ALIPAY_PRIVATE_KEY}"          # 应用私钥：内容或文件路径均可
+#       alipay_public_key: "${ALIPAY_PUBLIC_KEY}"     # 支付宝公钥（不是应用公钥）
+#       # auto：PC 用电脑网站支付、手机用手机网站支付；
+#       # page / wap：固定使用电脑 / 手机网站支付；
+#       # qrcode：当面付扫码（个人开发者最容易开通）
+#       mode: auto
+#       sandbox: false
 
-  # ---------------- 微信支付 APIv3 ----------------
-  # 商户平台 → 账户中心 → API 安全：申请 API 证书、设置 APIv3 密钥、开通「微信支付公钥」。
-  - type: wxpay
-    driver: wechat
-    name: 微信支付
-    options:
-      app_id: "wx0000000000000000"                  # 与商户号绑定的 AppID
-      mch_id: "1900000000"
-      api_v3_key: "${WECHAT_API_V3_KEY}"            # 32 位
-      serial_no: "商户API证书序列号"
-      private_key: "/app/certs/apiclient_key.pem"   # 商户 API 私钥：内容或文件路径
-      public_key_id: "PUB_KEY_ID_0000000000000000000000000000"
-      public_key: "/app/certs/pub_key.pem"          # 微信支付公钥：内容或文件路径
-      mode: native   # native：扫码；h5：手机浏览器跳转（需单独开通）；auto：手机用 h5、其余扫码
+#   # ---------------- 微信支付 APIv3 ----------------
+#   # 商户平台 → 账户中心 → API 安全：申请 API 证书、设置 APIv3 密钥、开通「微信支付公钥」。
+#   - type: wxpay
+#     driver: wechat
+#     name: 微信支付
+#     options:
+#       app_id: "wx0000000000000000"                  # 与商户号绑定的 AppID
+#       mch_id: "1900000000"
+#       api_v3_key: "${WECHAT_API_V3_KEY}"            # 32 位
+#       serial_no: "商户API证书序列号"
+#       private_key: "/app/certs/apiclient_key.pem"   # 商户 API 私钥：内容或文件路径
+#       public_key_id: "PUB_KEY_ID_0000000000000000000000000000"
+#       public_key: "/app/certs/pub_key.pem"          # 微信支付公钥：内容或文件路径
+#       mode: native   # native：扫码；h5：手机浏览器跳转（需单独开通）；auto：手机用 h5、其余扫码
 
-  # ---------------- PayPal ----------------
-  # developer.paypal.com → Apps & Credentials 创建应用；在应用下添加 Webhook：
-  #   URL：{base_url}/notify/paypal
-  #   事件：Checkout order approved、Payment capture completed
-  - type: paypal
-    driver: paypal
-    name: PayPal
-    enabled: false
-    options:
-      client_id: "${PAYPAL_CLIENT_ID}"
-      client_secret: "${PAYPAL_CLIENT_SECRET}"
-      webhook_id: "${PAYPAL_WEBHOOK_ID}"
-      sandbox: true
-      brand_name: "My Store"
-      currency: USD
-      exchange_rate: 0.14   # 1 元人民币 = 0.14 美元，订单金额按此换算
+#   # ---------------- PayPal ----------------
+#   # developer.paypal.com → Apps & Credentials 创建应用；在应用下添加 Webhook：
+#   #   URL：{base_url}/notify/paypal
+#   #   事件：Checkout order approved、Payment capture completed
+#   - type: paypal
+#     driver: paypal
+#     name: PayPal
+#     enabled: false
+#     options:
+#       client_id: "${PAYPAL_CLIENT_ID}"
+#       client_secret: "${PAYPAL_CLIENT_SECRET}"
+#       webhook_id: "${PAYPAL_WEBHOOK_ID}"
+#       sandbox: true
+#       brand_name: "My Store"
+#       currency: USD
+#       exchange_rate: 0.14   # 1 元人民币 = 0.14 美元，订单金额按此换算
 
-  # ---------------- Stripe ----------------
-  # Dashboard → Developers → Webhooks 添加端点：
-  #   URL：{base_url}/notify/stripe
-  #   事件：checkout.session.completed、checkout.session.async_payment_succeeded
-  - type: stripe
-    driver: stripe
-    name: Stripe
-    enabled: false
-    options:
-      secret_key: "${STRIPE_SECRET_KEY}"
-      webhook_secret: "${STRIPE_WEBHOOK_SECRET}"
-      currency: USD
-      exchange_rate: 0.14
-      # payment_method_types: [card, alipay, wechat_pay]   # 留空则使用 Stripe 后台的支付方式设置
+#   # ---------------- Stripe ----------------
+#   # Dashboard → Developers → Webhooks 添加端点：
+#   #   URL：{base_url}/notify/stripe
+#   #   事件：checkout.session.completed、checkout.session.async_payment_succeeded
+#   - type: stripe
+#     driver: stripe
+#     name: Stripe
+#     enabled: false
+#     options:
+#       secret_key: "${STRIPE_SECRET_KEY}"
+#       webhook_secret: "${STRIPE_WEBHOOK_SECRET}"
+#       currency: USD
+#       exchange_rate: 0.14
+#       # payment_method_types: [card, alipay, wechat_pay]   # 留空则使用 Stripe 后台的支付方式设置
 
-  # ---------------- 模拟支付（仅测试） ----------------
-  # 收银台出现「模拟支付成功」按钮，任何人都能触发，生产环境务必关闭！
-  - type: mock
-    driver: mock
-    name: 模拟支付
-    enabled: false
+#   # ---------------- 模拟支付（仅测试） ----------------
+#   # 收银台出现「模拟支付成功」按钮，任何人都能触发，生产环境务必关闭！
+#   - type: mock
+#     driver: mock
+#     name: 模拟支付
+#     enabled: false
