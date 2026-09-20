@@ -197,6 +197,11 @@ sudo systemctl enable --now epay
 
 网关自身只监听 HTTP，HTTPS 交给前面的反向代理。启用代理后请在 `config.yaml` 中设置 `server.trust_proxy: true`，否则拿到的买家 IP 会是代理的 IP。
 
+两者选其一即可，它们不能同时占用 80 / 443 端口：
+
+- **服务器上还没有反向代理** → 用上面「全新服务器从零部署」的 Caddy 方案，证书自动申请与续期，配置最少。
+- **服务器上已经有 Nginx** → 继续用 Nginx，网关用基础的 `docker compose up -d` 启动并监听 8080，不必再引入 Caddy。
+
 Caddy（自动申请证书，最省事）：
 
 ```caddyfile
@@ -205,25 +210,24 @@ pay.example.com {
 }
 ```
 
-Nginx：
+Nginx：仓库里提供了现成的站点配置模板 [nginx-site.example.conf](../nginx-site.example.conf)，
+已包含 HTTP 跳转 HTTPS、转发买家真实 IP 所需的请求头、管理后台前端的 gzip 压缩，
+以及可选的后台 IP 白名单。
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name pay.example.com;
+```bash
+sudo cp nginx-site.example.conf /etc/nginx/sites-available/epay.conf
+sudo ln -s /etc/nginx/sites-available/epay.conf /etc/nginx/sites-enabled/
+sudo sed -i 's/pay.example.com/你的域名/g' /etc/nginx/sites-available/epay.conf
 
-    ssl_certificate     /etc/letsencrypt/live/pay.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/pay.example.com/privkey.pem;
+# 申请证书（会自动改写配置中的证书路径并配置自动续期）
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d 你的域名
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+> 不要对 `/notify/` 路径做 IP 白名单，否则收不到支付宝 / 微信 / PayPal / Stripe 的回调。
+> 需要限制来源时只限制 `/admin/`，模板里给了注释好的写法。
 
 > 只信任你自己的代理：`trust_proxy` 为 true 时网关会直接采用 `X-Forwarded-For`，若网关端口同时暴露在公网，买家 IP 可被伪造。
 
