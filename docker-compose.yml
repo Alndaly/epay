@@ -1,13 +1,22 @@
 services:
   epay:
     build: .
+    image: epay-gateway
     container_name: epay
     restart: unless-stopped
     ports:
       - "8080:8080"
     env_file:
-      - .env            # 存放 ${...} 引用的密钥，不要提交到仓库
+      # 存放 config.yaml 中 ${...} 引用的密钥（如 ADMIN_PASSWORD），不要提交到仓库
+      - path: .env
+        required: false
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./certs:/app/certs:ro   # 微信支付等证书文件
-      - ./data:/app/data        # SQLite 数据库
+      - ./certs:/app/certs:ro # 微信支付等证书文件（没有可删除这一行）
+      - ./data:/app/data # SQLite 数据库，需要备份
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
