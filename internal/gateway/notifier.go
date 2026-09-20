@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,9 @@ var retrySchedule = []time.Duration{
 }
 
 const (
+	// maxNotifyError 记录到订单上的失败原因的最大长度（字符）。
+	maxNotifyError = 300
+
 	notifyBatchSize   = 50
 	notifyConcurrency = 8
 	notifyPollPeriod  = 5 * time.Second
@@ -107,10 +111,10 @@ func (n *Notifier) deliver(ctx context.Context, o *model.Order) {
 		u.Status = model.NotifySuccess
 		n.log.Info("商户通知成功", "trade_no", o.TradeNo, "attempt", u.Count)
 	case u.Count > len(retrySchedule):
-		u.Status, u.Error = model.NotifyFailed, err.Error()
+		u.Status, u.Error = model.NotifyFailed, truncate(err.Error(), maxNotifyError)
 		n.log.Error("商户通知多次失败，已放弃", "trade_no", o.TradeNo, "err", err)
 	default:
-		u.Status, u.Error = model.NotifyPending, err.Error()
+		u.Status, u.Error = model.NotifyPending, truncate(err.Error(), maxNotifyError)
 		u.NextAt = time.Now().Add(retrySchedule[u.Count-1])
 		n.log.Warn("商户通知失败，稍后重试", "trade_no", o.TradeNo, "attempt", u.Count, "next", u.NextAt, "err", err)
 	}
@@ -142,6 +146,11 @@ func (n *Notifier) send(ctx context.Context, o *model.Order) error {
 	req.Header.Set("User-Agent", "epay-gateway-notify/1.0")
 	resp, err := n.client.Do(req)
 	if err != nil {
+		// url.Error 的文本会带上完整通知地址（含全部签名参数），又长又与失败原因无关，只保留原因。
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("请求商户失败: %w", urlErr.Err)
+		}
 		return err
 	}
 	defer resp.Body.Close()

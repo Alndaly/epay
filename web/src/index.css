@@ -128,3 +128,18 @@
     @apply font-sans;
   }
 }
+
+@layer components {
+  /*
+    Card / Alert 内部用 CSS grid 的 1fr 列排版，而 1fr 的最小宽度是 min-content：
+    订单号、上游交易号、回调 URL 等不可断行的长串会撑破列宽，把同行的操作按钮挤出卡片，
+    或使长文本被裁剪。这里统一允许这些文本容器收缩并在任意位置断行。
+  */
+  [data-slot="card-title"],
+  [data-slot="card-description"],
+  [data-slot="alert-title"],
+  [data-slot="alert-description"] {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
