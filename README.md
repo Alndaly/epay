@@ -22,13 +22,19 @@
 
 ## 快速开始
 
+新服务器上（需要一个已解析到本机的域名，Caddy 会自动申请 HTTPS 证书）：
+
 ```bash
 git clone git@github.com:Alndaly/epay.git && cd epay
-cp config.example.yaml config.yaml              # 把 server.base_url 改成你的公网域名
-echo "ADMIN_PASSWORD=$(openssl rand -hex 8)" > .env
-docker compose up -d
-cat .env                                        # 管理后台密码
+cp config.example.yaml config.yaml   # 把 server.base_url 改成 https://你的域名
+cp Caddyfile.example Caddyfile       # 把里面的域名也改成你的
+echo "ADMIN_PASSWORD=$(openssl rand -hex 8)" > .env && cat .env   # 管理后台密码
+
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 ```
+
+完整步骤（域名解析、防火墙、安装 Docker、自动备份）见[部署指南](docs/deployment.md#全新服务器从零部署推荐流程)。
+本机试用可以省掉 Caddy：把 `base_url` 设为 `http://127.0.0.1:8080` 后直接 `docker compose up -d`。
 
 打开 `https://你的域名/admin/`（账号 `admin`）：
 

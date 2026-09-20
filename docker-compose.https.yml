@@ -1,0 +1,30 @@
+# 生产部署：在基础配置之上加一层 Caddy 反向代理，自动申请与续期 HTTPS 证书。
+#
+#   1. 把域名解析到本机公网 IP，并放开 80 / 443 端口；
+#   2. cp Caddyfile.example Caddyfile，把里面的 pay.example.com 改成你的域名；
+#   3. docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# 启用后网关不再直接暴露 8080，只能通过 Caddy 访问。
+services:
+  epay:
+    ports: !reset [] # 取消基础配置里的端口映射，仅在内部网络暴露
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: epay-caddy
+    restart: unless-stopped
+    depends_on:
+      - epay
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # 证书，不要删除
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -2,6 +2,7 @@
 /data/
 /certs/
 config.yaml
+Caddyfile
 .env
 *.db
 *.db-*

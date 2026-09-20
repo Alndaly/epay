@@ -7,7 +7,124 @@
 - 一个**公网可访问的 HTTPS 域名**。支付宝、微信、PayPal、Stripe 都需要回调网关，内网地址收不到回调。
 - 服务器时间准确（微信支付、Stripe 的回调验签会校验时间戳，偏差超过 5 分钟会被拒绝）。
 
-## 方式一：Docker Compose（推荐）
+## 全新服务器从零部署（推荐流程）
+
+以一台干净的 Ubuntu / Debian 云服务器为例，从零到可收款大约 10 分钟。下文假设域名为 `pay.example.com`。
+
+### 1. 域名解析
+
+在域名服务商处添加一条 A 记录，把 `pay.example.com` 指向服务器公网 IP。等解析生效（`ping pay.example.com` 能看到你的 IP）再继续，否则后面申请证书会失败。
+
+### 2. 放开端口
+
+安全组 / 防火墙只需要放开 **80** 与 **443**（80 用于证书校验和 HTTP 跳转）。网关本身的 8080 不需要对外开放。
+
+```bash
+# 若服务器启用了 ufw
+sudo ufw allow 80,443/tcp
+sudo ufw enable
+```
+
+### 3. 安装 Docker
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo systemctl enable --now docker
+```
+
+### 4. 拉取代码并配置
+
+```bash
+sudo mkdir -p /opt && cd /opt
+sudo git clone git@github.com:Alndaly/epay.git epay   # 无 SSH 密钥可改用 https 地址
+cd epay
+
+cp config.example.yaml config.yaml
+cp Caddyfile.example Caddyfile
+```
+
+编辑两个文件，各改一行：
+
+```bash
+vi config.yaml    # server.base_url 改成 https://pay.example.com
+vi Caddyfile      # 第一行的 pay.example.com 改成你的域名
+```
+
+生成管理员密码：
+
+```bash
+echo "ADMIN_PASSWORD=$(openssl rand -hex 8)" > .env
+cat .env          # 记下这个密码
+chmod 600 .env
+```
+
+### 5. 启动（自带自动 HTTPS）
+
+```bash
+sudo docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+```
+
+这会启动两个容器：`epay`（网关）与 `epay-caddy`（反向代理，自动申请并续期 Let's Encrypt 证书）。
+加上 `docker-compose.https.yml` 后网关不再直接暴露 8080，只能通过 Caddy 访问。
+
+查看状态与日志：
+
+```bash
+sudo docker compose -f docker-compose.yml -f docker-compose.https.yml ps      # epay 应为 healthy
+sudo docker compose -f docker-compose.yml -f docker-compose.https.yml logs -f
+```
+
+> 首次启动 Caddy 申请证书需要几十秒。若一直失败，检查域名解析是否生效、80 端口是否放开。
+
+### 6. 验证
+
+```bash
+curl https://pay.example.com/healthz     # 期望输出 ok
+```
+
+浏览器打开 `https://pay.example.com/admin/`，用 `admin` + `.env` 里的密码登录。
+
+### 7. 配置支付渠道与商户
+
+1. 「支付渠道 → 新建渠道」，按[渠道申请与配置](channels.md)填写参数。PayPal / Stripe 需要把页面上给出的回调地址填到其后台。
+2. 「商户 → 新建商户」，把支付地址、商户 ID、商户密钥填进 new-api，详见[接入 new-api](new-api.md)。
+3. 建议先用「模拟支付」渠道跑通一笔，确认 new-api 能正常到账后删除该渠道。
+
+### 8. 设置自动备份
+
+数据库里有订单和全部渠道密钥，务必备份：
+
+```bash
+sudo apt install -y sqlite3
+sudo mkdir -p /opt/epay-backup
+
+# 每天凌晨 3 点备份，保留 30 天。注意用追加的方式写 crontab，避免覆盖已有任务
+( sudo crontab -l 2>/dev/null; \
+  echo '0 3 * * * cd /opt/epay && /usr/bin/sqlite3 data/epay.db ".backup /opt/epay-backup/epay-$(date +\%F).db" && find /opt/epay-backup -name "epay-*.db" -mtime +30 -delete' \
+) | sudo crontab -
+```
+
+> WAL 模式下必须用 `.backup`，直接 `cp` 可能拿到不一致的数据库。cron 里的 `%` 需要写成 `\%`。
+
+### 9. 日常维护
+
+```bash
+cd /opt/epay
+sudo git pull
+sudo docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build   # 升级
+```
+
+为了少敲参数，可以在 shell 里加个别名：
+
+```bash
+echo "alias epaydc='docker compose -f /opt/epay/docker-compose.yml -f /opt/epay/docker-compose.https.yml'" >> ~/.bashrc
+```
+
+之后就能用 `epaydc ps`、`epaydc logs -f`、`epaydc restart`。
+
+## 方式二：已有反向代理时的 Docker Compose
+
+已经有 Nginx / Caddy 等反向代理时，用基础配置即可，网关监听 8080 交给你的代理转发（见下文[反向代理与 HTTPS](#反向代理与-https)）。
 
 ```bash
 git clone git@github.com:Alndaly/epay.git
@@ -40,7 +157,7 @@ docker compose logs -f
 docker build -t epay-gateway:v0.1.0 --build-arg VERSION=v0.1.0 .
 ```
 
-## 方式二：直接编译运行
+## 方式三：直接编译运行
 
 需要 Go 1.25+ 与 pnpm（用于构建管理后台前端）：
 
