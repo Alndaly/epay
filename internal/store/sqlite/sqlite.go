@@ -93,11 +93,18 @@ type Store struct {
 var _ store.Store = (*Store)(nil)
 
 // Open 打开（必要时创建）数据库文件并执行建表。
+//
+// 数据库中保存着渠道与商户密钥的明文，因此新建的数据目录与数据库文件都只对属主可读写；
+// SQLite 后续创建的 -wal / -shm 会沿用数据库文件的权限。已存在的文件不改动其权限，
+// 如果是从旧版本升级，可手动执行 chmod 600 data/epay.db*。
 func Open(path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("创建数据目录: %w", err)
 		}
+	}
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		f.Close()
 	}
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
